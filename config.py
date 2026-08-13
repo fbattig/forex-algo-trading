@@ -103,6 +103,19 @@ class OandaConfig:
 
 
 @dataclass
+class EmailConfig:
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    sender: str = ""
+    password: str = ""
+    recipient: str = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.sender and self.password and self.recipient)
+
+
+@dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
@@ -112,6 +125,7 @@ class Config:
     ml: MLConfig = field(default_factory=MLConfig)
     fade_ml: FadeMLConfig = field(default_factory=FadeMLConfig)
     oanda: OandaConfig = field(default_factory=OandaConfig)
+    email: EmailConfig = field(default_factory=EmailConfig)
 
 
 def _parse_env_file(path: str) -> dict:
@@ -168,4 +182,9 @@ def load_config(env_file: str | None = None) -> Config:
     cfg.oanda.api_url = pick("OANDA_API_URL")
     env = pick("OANDA_ENV")
     cfg.oanda.environment = env if env in ("practice", "live") else "practice"
+    cfg.email.smtp_host = pick("EMAIL_SMTP_HOST") or "smtp.gmail.com"
+    cfg.email.smtp_port = int(pick("EMAIL_SMTP_PORT") or "587")
+    cfg.email.sender = pick("EMAIL_SENDER")
+    cfg.email.password = pick("EMAIL_PASSWORD")
+    cfg.email.recipient = pick("EMAIL_RECIPIENT")
     return cfg

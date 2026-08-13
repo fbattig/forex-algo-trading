@@ -28,6 +28,7 @@ from config import load_config
 from broker.oanda import OandaClient
 from strategies.mean_reversion import MeanReversion
 from ml.fade_filter import FadeFilter, apply_fade_filter, ml_applies
+from notify import make_trade_chart, send_email
 
 INSTRUMENTS = ["EUR_GBP", "AUD_USD", "EUR_USD", "GBP_USD"]
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_trade.log")
@@ -77,15 +78,18 @@ def fetch_complete_daily(client, instrument, count=400):
 
 
 def get_open_positions_map(client):
+    """Return {instrument: {'side': 1|-1, 'units': float, 'avg': float}}."""
     data = client.get_open_positions()
     out = {}
     for p in data.get("positions", []):
-        long_units = float(p.get("long", {}).get("units", 0))
-        short_units = float(p.get("short", {}).get("units", 0))
+        long_units = float(p.get("long", {}).get("units", 0) or 0)
+        short_units = float(p.get("short", {}).get("units", 0) or 0)
         if long_units > 0:
-            out[p["instrument"]] = 1
+            avg = float(p.get("long", {}).get("averagePrice", 0) or 0)
+            out[p["instrument"]] = {"side": 1, "units": long_units, "avg": avg}
         elif short_units > 0:
-            out[p["instrument"]] = -1
+            avg = float(p.get("short", {}).get("averagePrice", 0) or 0)
+            out[p["instrument"]] = {"side": -1, "units": short_units, "avg": avg}
     return out
 
 
@@ -99,6 +103,30 @@ def quote_to_account_rate(client, instrument, account_currency):
         mid = (float(pr["bids"][0]["price"]) + float(pr["asks"][0]["price"])) / 2.0
         return mid
     raise RuntimeError(f"could not price {quote}_{account_currency}")
+
+
+def tail_log(path, n=20):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        return "".join(lines[-n:])
+    except Exception:
+        return "(no log available)"
+
+
+def send_trade_alert(cfg, inst, df, subject, body, entry_idx=None, entry_price=None,
+                     entry_side=None, exit_idx=None, exit_price=None):
+    """Generate a chart and email the trade notification (non-fatal on failure)."""
+    try:
+        chart = make_trade_chart(inst, df, cfg.mean_reversion.lookback, cfg.mean_reversion.num_std,
+                                 path="reports/last_trade.png",
+                                 entry_idx=entry_idx, entry_price=entry_price, entry_side=entry_side,
+                                 exit_idx=exit_idx, exit_price=exit_price)
+        body += "\n\nRecent log:\n" + tail_log(LOG_FILE, 20)
+        ok, msg = send_email(cfg, subject, body, attachments=[chart])
+        log.info("%s: email '%s' -> %s", inst, subject, "sent" if ok else "FAILED: " + msg)
+    except Exception as e:
+        log.error("%s: email error: %s", inst, e)
 
 
 def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
@@ -129,7 +157,7 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
             exit_short = bool(sig["exit_short"].iloc[-1])
             atr_val = float(sig["atr"].iloc[-1])
             close = float(df["Close"].iloc[-1])
-            pos = positions.get(inst, 0)
+            pos = positions.get(inst, {}).get("side", 0)
 
             if pos == 0 and signal != 0:
                 stop_distance = cfg.strategy.atr_stop_mult * atr_val
@@ -146,18 +174,40 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
                 else:
                     client.place_market_order_with_sl(inst, signal * units, stop_price)
                     log.info("%s: ENTERED %s %d units, stop=%.5f", inst, side, signal * units, stop_price)
+                    send_trade_alert(cfg, inst, df,
+                                     f"TRADE OPENED: {inst} {side}",
+                                     f"{side} {inst} @ {close:.5f}  (stop {stop_price:.5f}, {units} units)",
+                                     entry_idx=len(df) - 1, entry_price=close, entry_side=signal)
             elif pos == 1 and exit_long:
                 if dry_run:
                     log.info("%s: [DRY] would CLOSE long (reverted to mean)", inst)
                 else:
+                    entry_info = positions.get(inst, {})
+                    entry_avg = entry_info.get("avg", 0.0) or close
+                    entry_units = entry_info.get("units", 0.0)
+                    rate = quote_to_account_rate(client, inst, currency)
+                    pnl = (close - entry_avg) * entry_units * rate
                     client.close_position(inst)
                     log.info("%s: CLOSED long (reverted to mean)", inst)
+                    send_trade_alert(cfg, inst, df,
+                                     f"TRADE CLOSED: {inst} LONG",
+                                     f"Closed LONG {inst} @ {close:.5f}  (approx P&L {pnl:+.2f} {currency})",
+                                     exit_idx=len(df) - 1, exit_price=close)
             elif pos == -1 and exit_short:
                 if dry_run:
                     log.info("%s: [DRY] would CLOSE short (reverted to mean)", inst)
                 else:
+                    entry_info = positions.get(inst, {})
+                    entry_avg = entry_info.get("avg", 0.0) or close
+                    entry_units = entry_info.get("units", 0.0)
+                    rate = quote_to_account_rate(client, inst, currency)
+                    pnl = (entry_avg - close) * entry_units * rate
                     client.close_position(inst)
                     log.info("%s: CLOSED short (reverted to mean)", inst)
+                    send_trade_alert(cfg, inst, df,
+                                     f"TRADE CLOSED: {inst} SHORT",
+                                     f"Closed SHORT {inst} @ {close:.5f}  (approx P&L {pnl:+.2f} {currency})",
+                                     exit_idx=len(df) - 1, exit_price=close)
             else:
                 state = "LONG" if pos == 1 else ("SHORT" if pos == -1 else "flat")
                 log.info("%s: %s - no action (signal=%d, close=%.5f)", inst, state, signal, close)
