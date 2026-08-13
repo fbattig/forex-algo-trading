@@ -129,6 +129,26 @@ def send_trade_alert(cfg, inst, df, subject, body, entry_idx=None, entry_price=N
         log.error("%s: email error: %s", inst, e)
 
 
+def send_heartbeat(cfg, equity, currency, positions, dry_run, use_ml, actions):
+    """Email a daily heartbeat so a no-trade run is still visible. Non-fatal."""
+    if actions:
+        return  # trade alerts already covered this cycle
+    try:
+        lines = [
+            "Paper trader ran successfully - no trades this cycle.",
+            f"Account equity: {equity:.2f} {currency}",
+            f"Open positions: {positions if positions else '(none)'}",
+            f"dry_run={dry_run} | ml={use_ml}",
+            "",
+            "Recent log:",
+            tail_log(LOG_FILE, 20),
+        ]
+        ok, msg = send_email(cfg, "Paper trader heartbeat - no trades", "\n".join(lines))
+        log.info("Heartbeat email -> %s", "sent" if ok else "FAILED: " + msg)
+    except Exception as e:
+        log.error("Heartbeat email error: %s", e)
+
+
 def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
     account = client.get_account_summary()["account"]
     equity = float(account.get("NAV", account.get("balance", 100000)))
@@ -137,6 +157,8 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
 
     positions = get_open_positions_map(client)
     log.info("Open positions: %s", positions if positions else "(none)")
+
+    actions = 0  # real (non-dry-run) trades opened or closed this cycle
 
     strat = MeanReversion(cfg)
     fade = FadeFilter(cfg)
@@ -178,6 +200,7 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
                                      f"TRADE OPENED: {inst} {side}",
                                      f"{side} {inst} @ {close:.5f}  (stop {stop_price:.5f}, {units} units)",
                                      entry_idx=len(df) - 1, entry_price=close, entry_side=signal)
+                    actions += 1
             elif pos == 1 and exit_long:
                 if dry_run:
                     log.info("%s: [DRY] would CLOSE long (reverted to mean)", inst)
@@ -193,6 +216,7 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
                                      f"TRADE CLOSED: {inst} LONG",
                                      f"Closed LONG {inst} @ {close:.5f}  (approx P&L {pnl:+.2f} {currency})",
                                      exit_idx=len(df) - 1, exit_price=close)
+                    actions += 1
             elif pos == -1 and exit_short:
                 if dry_run:
                     log.info("%s: [DRY] would CLOSE short (reverted to mean)", inst)
@@ -208,11 +232,14 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
                                      f"TRADE CLOSED: {inst} SHORT",
                                      f"Closed SHORT {inst} @ {close:.5f}  (approx P&L {pnl:+.2f} {currency})",
                                      exit_idx=len(df) - 1, exit_price=close)
+                    actions += 1
             else:
                 state = "LONG" if pos == 1 else ("SHORT" if pos == -1 else "flat")
                 log.info("%s: %s - no action (signal=%d, close=%.5f)", inst, state, signal, close)
         except Exception as e:
             log.error("%s: error - %s", inst, e)
+
+    return {"equity": equity, "currency": currency, "positions": positions, "actions": actions}
 
 
 def seconds_until_next_close():
@@ -258,7 +285,9 @@ def main():
                     break
                 time.sleep(min(secs, 3600))
     else:
-        run_once(client, cfg, instruments, args.risk_pct, args.dry_run, use_ml=not args.no_ml)
+        summary = run_once(client, cfg, instruments, args.risk_pct, args.dry_run, use_ml=not args.no_ml)
+        send_heartbeat(cfg, summary["equity"], summary["currency"], summary["positions"],
+                       args.dry_run, not args.no_ml, summary["actions"])
         log.info("Done. Log written to %s", LOG_FILE)
 
 
