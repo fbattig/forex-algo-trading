@@ -26,6 +26,7 @@ from strategies.trend_following import TrendFollowing
 from strategies.donchian import DonchianTrend
 from strategies.mean_reversion import MeanReversion
 from ml.regime_filter import RegimeFilter, apply_filter
+from ml.fade_filter import FadeFilter, apply_fade_filter
 from backtest.engine import BacktestEngine
 from backtest.metrics import compute_metrics
 from analysis.walk_forward import walk_forward
@@ -38,7 +39,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Forex hybrid algorithmic trading system")
     p.add_argument("--pairs", nargs="+", default=["EURUSD=X", "GBPUSD=X"],
                    help="Yahoo symbols; OANDA instruments are derived automatically")
-    p.add_argument("--strategy", choices=["donchian", "ema", "meanreversion"], default="donchian",
+    p.add_argument("--strategy", choices=["donchian", "ema", "meanreversion", "meanreversion-ml"], default="donchian",
                    help="core strategy (default: donchian breakout)")
     p.add_argument("--start", default="2016-01-01")
     p.add_argument("--no-ml", action="store_true", help="disable the ML regime filter")
@@ -60,9 +61,12 @@ def make_strategy(cfg, name: str):
     if name == "ema":
         cfg.strategy.trail_enabled = True
         return TrendFollowing(cfg.strategy)
-    if name == "meanreversion":
+    if name in ("meanreversion", "meanreversion-ml"):
         cfg.strategy.trail_enabled = False
-        return MeanReversion(cfg)
+        strat = MeanReversion(cfg)
+        if name == "meanreversion-ml":
+            strat.uses_ml = True
+        return strat
     cfg.strategy.trail_enabled = False
     return DonchianTrend(cfg)
 
@@ -91,8 +95,12 @@ def load_data(symbol: str, oanda_symbol: str, cfg):
 def build_signals(df, strat, cfg, use_ml):
     sig = strat.generate_signals(df)
     if use_ml:
-        proba = RegimeFilter(cfg).generate_probabilities(df)
-        sig["signal"] = apply_filter(sig["signal"], proba, cfg.ml.prob_threshold)
+        if strat.name == "mean_reversion":
+            proba = FadeFilter(cfg).generate_probabilities(df)
+            sig["signal"] = apply_fade_filter(sig["signal"], proba, cfg.fade_ml.prob_threshold)
+        else:
+            proba = RegimeFilter(cfg).generate_probabilities(df)
+            sig["signal"] = apply_filter(sig["signal"], proba, cfg.ml.prob_threshold)
     return sig
 
 
@@ -123,7 +131,7 @@ def main():
         "=" * 62,
         f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"Strategy  : {args.strategy}",
-        f"ML filter : {'on' if (cfg.ml.enabled and args.strategy in ('donchian', 'ema')) else 'off'}",
+        f"ML filter : {'on' if (cfg.ml.enabled and args.strategy in ('donchian', 'ema', 'meanreversion-ml')) else 'off'}",
         f"Capital   : ${cfg.risk.initial_capital:,.0f}",
         f"Risk/trade: {cfg.risk.risk_per_trade * 100:.2f}%",
         "",

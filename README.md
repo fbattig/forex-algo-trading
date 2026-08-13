@@ -30,7 +30,8 @@ pip install -r requirements.txt
 
 ```
 python main.py                    # Donchian breakout, EURUSD + GBPUSD, rule-based + ML
-python main.py --strategy ema     # EMA crossover strategy instead
+python main.py --strategy ema                 # EMA crossover strategy instead
+python main.py --strategy meanreversion-ml     # mean reversion + ML fade filter
 python main.py --pairs EURUSD=X   # single pair
 python main.py --no-ml            # rule-based only
 python main.py --capital 50000 --risk 0.02
@@ -89,6 +90,7 @@ python paper_trade.py --loop     # run continuously, act after each daily close
 python paper_trade.py --risk-pct 2
 ```
 
+- Entries are gated by an ML fade filter (RandomForest) that predicts whether a fade will revert; disable with --no-ml.
 - Entries are market orders with an attached 2x-ATR stop loss.
 - Positions are closed when price reverts to the mean (checked once per day).
 - Refuses to trade a LIVE account unless you pass --live.

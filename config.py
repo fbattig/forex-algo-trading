@@ -75,6 +75,21 @@ class MLConfig:
 
 
 @dataclass
+class FadeMLConfig:
+    enabled: bool = True
+    model: str = "random_forest"   # "random_forest" | "gradient_boosting"
+    horizon: int = 10              # revert window (bars) the model predicts
+    train_window: int = 750
+    refit_every: int = 50
+    prob_threshold: float = 0.50   # min P(revert) to take a fade
+    features: List[str] = field(default_factory=lambda: [
+        "ret_1", "ret_5", "ret_10", "ret_20",
+        "vol_20", "atr_ratio", "adx", "rsi_14",
+        "mom_10", "zscore",
+    ])
+
+
+@dataclass
 class OandaConfig:
     api_token: str = ""
     account_id: str = ""
@@ -94,6 +109,7 @@ class Config:
     mean_reversion: MeanReversionConfig = field(default_factory=MeanReversionConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     ml: MLConfig = field(default_factory=MLConfig)
+    fade_ml: FadeMLConfig = field(default_factory=FadeMLConfig)
     oanda: OandaConfig = field(default_factory=OandaConfig)
 
 

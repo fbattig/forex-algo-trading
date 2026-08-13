@@ -47,8 +47,8 @@ echo   2. BACKTEST: Donchian + ML (full run)
 echo   3. BACKTEST: quick (EURUSD only)
 echo   4. BACKTEST: EMA crossover
 echo   5. BACKTEST: custom capital and risk
-echo   6. PAPER TRADE: live on practice (one check)
-echo   7. PAPER TRADE: dry-run (no orders placed)
+echo   6. PAPER TRADE: live on practice (mean-reversion + ML)
+echo   7. PAPER TRADE: dry-run (mean-reversion + ML)
 echo   8. Open the results folder
 echo   9. Exit
 echo ============================================================

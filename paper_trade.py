@@ -27,6 +27,7 @@ sys.path.insert(0, "C:/cline_forex_hibryd")
 from config import load_config
 from broker.oanda import OandaClient
 from strategies.mean_reversion import MeanReversion
+from ml.fade_filter import FadeFilter, apply_fade_filter
 
 INSTRUMENTS = ["EUR_GBP", "AUD_USD", "EUR_USD", "GBP_USD"]
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_trade.log")
@@ -51,6 +52,7 @@ def parse_args():
     p.add_argument("--risk-pct", type=float, default=1.0, help="risk per trade in percent")
     p.add_argument("--lookback", type=int, default=None, help="mean-reversion lookback window")
     p.add_argument("--num-std", type=float, default=None, help="entry threshold in standard deviations")
+    p.add_argument("--no-ml", action="store_true", help="disable the ML fade filter")
     return p.parse_args()
 
 
@@ -98,23 +100,27 @@ def quote_to_account_rate(client, instrument, account_currency):
     raise RuntimeError(f"could not price {quote}_{account_currency}")
 
 
-def run_once(client, cfg, instruments, risk_pct, dry_run):
+def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
     account = client.get_account_summary()["account"]
     equity = float(account.get("NAV", account.get("balance", 100000)))
     currency = account.get("currency", "USD")
-    log.info("Account %s | equity=%.2f %s | dry_run=%s", account.get("id"), equity, currency, dry_run)
+    log.info("Account %s | equity=%.2f %s | dry_run=%s | ml=%s", account.get("id"), equity, currency, dry_run, use_ml)
 
     positions = get_open_positions_map(client)
     log.info("Open positions: %s", positions if positions else "(none)")
 
     strat = MeanReversion(cfg)
+    fade = FadeFilter(cfg) if use_ml else None
     for inst in instruments:
         try:
-            df = fetch_complete_daily(client, inst)
-            if len(df) < 100:
+            df = fetch_complete_daily(client, inst, count=1500)
+            if len(df) < 300:
                 log.warning("%s: only %d bars, skipping", inst, len(df))
                 continue
             sig = strat.generate_signals(df)
+            if fade is not None:
+                proba = fade.generate_probabilities(df)
+                sig["signal"] = apply_fade_filter(sig["signal"], proba, cfg.fade_ml.prob_threshold)
             signal = int(sig["signal"].iloc[-1])
             exit_long = bool(sig["exit_long"].iloc[-1])
             exit_short = bool(sig["exit_short"].iloc[-1])
@@ -188,7 +194,7 @@ def main():
         log.info("Loop mode ON: acting after each daily close (~21:05 UTC). Ctrl+C to stop.")
         while True:
             try:
-                run_once(client, cfg, instruments, args.risk_pct, args.dry_run)
+                run_once(client, cfg, instruments, args.risk_pct, args.dry_run, use_ml=not args.no_ml)
             except Exception as e:
                 log.error("cycle error: %s", e)
             while True:
@@ -197,7 +203,7 @@ def main():
                     break
                 time.sleep(min(secs, 3600))
     else:
-        run_once(client, cfg, instruments, args.risk_pct, args.dry_run)
+        run_once(client, cfg, instruments, args.risk_pct, args.dry_run, use_ml=not args.no_ml)
         log.info("Done. Log written to %s", LOG_FILE)
 
 
