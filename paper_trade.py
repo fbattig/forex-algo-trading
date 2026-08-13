@@ -27,7 +27,7 @@ sys.path.insert(0, "C:/cline_forex_hibryd")
 from config import load_config
 from broker.oanda import OandaClient
 from strategies.mean_reversion import MeanReversion
-from ml.fade_filter import FadeFilter, apply_fade_filter
+from ml.fade_filter import FadeFilter, apply_fade_filter, ml_applies
 
 INSTRUMENTS = ["EUR_GBP", "AUD_USD", "EUR_USD", "GBP_USD"]
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_trade.log")
@@ -53,6 +53,7 @@ def parse_args():
     p.add_argument("--lookback", type=int, default=None, help="mean-reversion lookback window")
     p.add_argument("--num-std", type=float, default=None, help="entry threshold in standard deviations")
     p.add_argument("--no-ml", action="store_true", help="disable the ML fade filter")
+    p.add_argument("--ml-pairs", nargs="+", default=None, help="OANDA instruments to apply ML to (default: EUR_GBP EUR_USD)")
     return p.parse_args()
 
 
@@ -110,15 +111,17 @@ def run_once(client, cfg, instruments, risk_pct, dry_run, use_ml=True):
     log.info("Open positions: %s", positions if positions else "(none)")
 
     strat = MeanReversion(cfg)
-    fade = FadeFilter(cfg) if use_ml else None
+    fade = FadeFilter(cfg)
     for inst in instruments:
+        use_ml_pair = use_ml and ml_applies(cfg, inst)
+        log.info("%s: ML fade filter %s", inst, "ON" if use_ml_pair else "off")
         try:
             df = fetch_complete_daily(client, inst, count=1500)
             if len(df) < 300:
                 log.warning("%s: only %d bars, skipping", inst, len(df))
                 continue
             sig = strat.generate_signals(df)
-            if fade is not None:
+            if use_ml_pair:
                 proba = fade.generate_probabilities(df)
                 sig["signal"] = apply_fade_filter(sig["signal"], proba, cfg.fade_ml.prob_threshold)
             signal = int(sig["signal"].iloc[-1])
@@ -186,6 +189,8 @@ def main():
     if args.num_std is not None:
         cfg.mean_reversion.num_std = args.num_std
     cfg.strategy.trail_enabled = False
+    if args.ml_pairs is not None:
+        cfg.fade_ml.ml_pairs = args.ml_pairs
 
     instruments = args.pairs or INSTRUMENTS
     client = OandaClient(cfg.oanda)

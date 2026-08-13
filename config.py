@@ -82,6 +82,7 @@ class FadeMLConfig:
     train_window: int = 750
     refit_every: int = 50
     prob_threshold: float = 0.50   # min P(revert) to take a fade
+    ml_pairs: List[str] = field(default_factory=lambda: ["EUR_GBP", "EUR_USD"])  # empty = all pairs
     features: List[str] = field(default_factory=lambda: [
         "ret_1", "ret_5", "ret_10", "ret_20",
         "vol_20", "atr_ratio", "adx", "rsi_14",

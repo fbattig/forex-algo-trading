@@ -70,3 +70,16 @@ def apply_fade_filter(signal: pd.Series, proba: pd.Series, threshold: float) -> 
     s[(s != 0) & (proba < threshold)] = 0
     s[proba.isna()] = 0
     return s
+
+
+def ml_applies(cfg, instrument):
+    """Whether the ML fade filter should apply to a given OANDA instrument.
+
+    An empty cfg.fade_ml.ml_pairs list means \"apply to all instruments\".
+    """
+    if not cfg.fade_ml.enabled:
+        return False
+    pairs = cfg.fade_ml.ml_pairs
+    if not pairs:
+        return True
+    return instrument in pairs

@@ -26,7 +26,7 @@ from strategies.trend_following import TrendFollowing
 from strategies.donchian import DonchianTrend
 from strategies.mean_reversion import MeanReversion
 from ml.regime_filter import RegimeFilter, apply_filter
-from ml.fade_filter import FadeFilter, apply_fade_filter
+from ml.fade_filter import FadeFilter, apply_fade_filter, ml_applies
 from backtest.engine import BacktestEngine
 from backtest.metrics import compute_metrics
 from analysis.walk_forward import walk_forward
@@ -46,6 +46,7 @@ def parse_args():
     p.add_argument("--capital", type=float, default=100_000.0)
     p.add_argument("--risk", type=float, default=None, help="risk per trade as a fraction (e.g. 0.01)")
     p.add_argument("--risk-pct", type=float, default=None, help="risk per trade as a percent (e.g. 1 = 1%%)")
+    p.add_argument("--ml-pairs", nargs="+", default=None, help="OANDA instruments to apply the ML fade filter to")
     p.add_argument("--out", default="reports", help="output directory for charts")
     return p.parse_args()
 
@@ -92,12 +93,13 @@ def load_data(symbol: str, oanda_symbol: str, cfg):
     return generate_synthetic(symbol, n=3000, start=cfg.data.start), "synthetic"
 
 
-def build_signals(df, strat, cfg, use_ml):
+def build_signals(df, strat, cfg, use_ml, instrument=None):
     sig = strat.generate_signals(df)
     if use_ml:
         if strat.name == "mean_reversion":
-            proba = FadeFilter(cfg).generate_probabilities(df)
-            sig["signal"] = apply_fade_filter(sig["signal"], proba, cfg.fade_ml.prob_threshold)
+            if instrument is None or ml_applies(cfg, instrument):
+                proba = FadeFilter(cfg).generate_probabilities(df)
+                sig["signal"] = apply_fade_filter(sig["signal"], proba, cfg.fade_ml.prob_threshold)
         else:
             proba = RegimeFilter(cfg).generate_probabilities(df)
             sig["signal"] = apply_filter(sig["signal"], proba, cfg.ml.prob_threshold)
@@ -124,6 +126,8 @@ def main():
     elif args.risk is not None:
         cfg.risk.risk_per_trade = args.risk
     cfg.ml.enabled = not args.no_ml
+    if args.ml_pairs is not None:
+        cfg.fade_ml.ml_pairs = args.ml_pairs
 
     os.makedirs(args.out, exist_ok=True)
     summary = [
@@ -148,7 +152,7 @@ def main():
 
         strat = make_strategy(cfg, args.strategy)
 
-        sig_base = build_signals(df, strat, cfg, use_ml=False)
+        sig_base = build_signals(df, strat, cfg, use_ml=False, instrument=oanda_symbol)
         eng = BacktestEngine(cfg)
         eq_base = eng.run(sig_base)
         trades_base = eng.trades
@@ -158,8 +162,9 @@ def main():
         base_png = os.path.join(args.out, f"{symbol.replace('=', '_')}_{args.strategy}_rule.png")
         plot_equity(eq_base["equity"], f"{symbol} - {args.strategy} rule-based", base_png)
 
-        if cfg.ml.enabled and strat.uses_ml:
-            sig_hyb = build_signals(df, strat, cfg, use_ml=True)
+        ml_here = cfg.ml.enabled and strat.uses_ml and (strat.name != "mean_reversion" or ml_applies(cfg, oanda_symbol))
+        if ml_here:
+            sig_hyb = build_signals(df, strat, cfg, use_ml=True, instrument=oanda_symbol)
             eng2 = BacktestEngine(cfg)
             eq_hyb = eng2.run(sig_hyb)
             trades_hyb = eng2.trades
