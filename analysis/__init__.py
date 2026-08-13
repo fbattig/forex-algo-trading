@@ -1,0 +1,1 @@
+"""Validation and analysis (walk-forward, Monte Carlo, reporting)."""

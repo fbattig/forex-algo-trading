@@ -1,0 +1,1 @@
+"""Data loading (OANDA -> yfinance -> synthetic fallback)."""
